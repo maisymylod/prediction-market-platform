@@ -19,9 +19,7 @@ services:
 
   # Applies migrations then seeds, once, against a healthy db. Exits 0.
   migrate:
-    build:
-      context: .
-      dockerfile: apps/worker/Dockerfile
+    build: { context: ., dockerfile: Dockerfile }
     command: sh -c "pnpm db:migrate && pnpm db:seed"
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-pmp}:${POSTGRES_PASSWORD:-pmp}@db:5432/${POSTGRES_DB:-pmp}
@@ -31,38 +29,29 @@ services:
     restart: "no"
 
   worker:
-    build:
-      context: .
-      dockerfile: apps/worker/Dockerfile
+    build: { context: ., dockerfile: Dockerfile }
     command: pnpm --filter worker start
-    env_file:
-      - .env
+    # Runs keyless on the simulator by default. Add USE_KALSHI_LIVE / secrets here
+    # (or via an env_file) to enable live venue ingestion.
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-pmp}:${POSTGRES_PASSWORD:-pmp}@db:5432/${POSTGRES_DB:-pmp}
+      USE_PRICE_SIMULATOR: "true"
     depends_on:
-      db:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
+      db: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
     restart: unless-stopped
 
   web:
-    build:
-      context: .
-      dockerfile: apps/web/Dockerfile
+    build: { context: ., dockerfile: Dockerfile }
     command: pnpm --filter web start
-    env_file:
-      - .env
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-pmp}:${POSTGRES_PASSWORD:-pmp}@db:5432/${POSTGRES_DB:-pmp}
-      WEB_PORT: 3000
+      WEB_PORT: "3000"
     ports:
       - "${WEB_PORT:-3000}:3000"
     depends_on:
-      db:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
+      db: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
     restart: unless-stopped
 
 volumes:
