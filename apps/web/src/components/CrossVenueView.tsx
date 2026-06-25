@@ -12,7 +12,10 @@ function Leg({ leg }: { leg: BasisRow['legs'][number] }) {
         {leg.ticker}
       </div>
       <div className="mt-1 text-2xl tnum text-slate-100" data-cell="leg" data-market={leg.marketId}>
-        {cents(leg.yesEquiv)}
+        {/* key on the value so the cell flashes when this leg's mark moves */}
+        <span key={leg.yesEquiv ?? 'na'} className="inline-block animate-flash rounded px-1">
+          {cents(leg.yesEquiv)}
+        </span>
       </div>
       <div className="text-[11px] text-muted">YES-equivalent</div>
     </div>

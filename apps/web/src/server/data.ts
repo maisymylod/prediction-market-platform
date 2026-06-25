@@ -1,10 +1,4 @@
-import {
-  computeRisk,
-  type LinkedEvent,
-  type MarketSnapshot,
-  type PositionInput,
-  type VenueName,
-} from '@pmp/core';
+import { type LinkedEvent, type PositionInput, type VenueName } from '@pmp/core';
 import {
   venues as venuesTable,
   markets as marketsTable,
@@ -16,7 +10,8 @@ import {
 } from '@pmp/db';
 import { db } from './db.js';
 import { env } from './config.js';
-import type { BasisRow, DashboardModel, FeedRow, PositionRow } from './types.js';
+import { assembleDashboard } from '../lib/assemble.js';
+import type { DashboardModel, FeedLite, LiveBootstrap, MarketMeta, MarkLite } from './types.js';
 
 const num = (s: string | null): number | null => (s === null ? null : Number(s));
 
@@ -36,11 +31,11 @@ function clusterFor(category: string | null): string {
 }
 
 /**
- * Load everything the dashboard needs, convert numerics at the DB boundary, run
- * the pure risk engine, and assemble display view-models. The injected `now`
- * (ms) drives staleness — the engine itself never reads a clock.
+ * Load everything from the DB, convert numerics at the boundary, and build the
+ * serializable LiveBootstrap. The dashboard model is assembled by the SAME pure
+ * function the browser uses on each live recompute.
  */
-export async function loadDashboard(now: number = Date.now()): Promise<DashboardModel> {
+export async function loadBootstrap(now: number = Date.now()): Promise<LiveBootstrap> {
   const [venueRows, marketRows, positionRows, linkRows, linkMarketRows, snapRows, feedRows] =
     await Promise.all([
       db.select().from(venuesTable),
@@ -55,24 +50,31 @@ export async function loadDashboard(now: number = Date.now()): Promise<Dashboard
   const venueName = new Map<number, VenueName>(venueRows.map((v) => [v.id, v.name]));
   const marketById = new Map(marketRows.map((m) => [m.id, m]));
 
-  // --- marks (latest snapshot per market) ---
-  const marks = new Map<string, MarketSnapshot>();
-  for (const s of snapRows) {
-    const market = marketById.get(s.marketId);
-    if (!market) continue;
-    const ts = s.ts.getTime();
-    marks.set(String(s.marketId), {
-      marketId: String(s.marketId),
-      venue: venueName.get(market.venueId) ?? 'kalshi',
-      yesBid: num(s.yesBid),
-      yesAsk: num(s.yesAsk),
-      mark: num(s.mark),
-      ts,
-      stale: now - ts > env.STALE_THRESHOLD_MS,
-    });
-  }
+  const markets: MarketMeta[] = marketRows.map((m) => ({
+    marketId: String(m.id),
+    venue: venueName.get(m.venueId) ?? 'kalshi',
+    ticker: m.externalTicker,
+    question: m.question,
+    category: m.category ?? 'Uncategorized',
+    cluster: clusterFor(m.category),
+    resolutionDate: m.resolutionDate ? m.resolutionDate.toISOString() : null,
+    status: m.status,
+  }));
 
-  // --- positions -> risk inputs ---
+  const marks: MarkLite[] = snapRows
+    .filter((s) => marketById.has(s.marketId))
+    .map((s) => {
+      const market = marketById.get(s.marketId)!;
+      return {
+        marketId: String(s.marketId),
+        venue: venueName.get(market.venueId) ?? 'kalshi',
+        yesBid: num(s.yesBid),
+        yesAsk: num(s.yesAsk),
+        mark: num(s.mark),
+        ts: s.ts.getTime(),
+      };
+    });
+
   const positionInputs: PositionInput[] = positionRows.map((p) => {
     const market = marketById.get(p.marketId);
     const category = market?.category ?? null;
@@ -88,8 +90,7 @@ export async function loadDashboard(now: number = Date.now()): Promise<Dashboard
     };
   });
 
-  // --- links -> LinkedEvent[] ---
-  const legsByLink = new Map<number, { marketId: string; venue: VenueName; alignment: 'direct' | 'inverse' }[]>();
+  const legsByLink = new Map<number, LinkedEvent['legs']>();
   for (const lm of linkMarketRows) {
     const market = marketById.get(lm.marketId);
     if (!market) continue;
@@ -109,74 +110,29 @@ export async function loadDashboard(now: number = Date.now()): Promise<Dashboard
     resolutionMismatch: l.resolutionMismatch,
   }));
 
-  const risk = computeRisk({
-    positions: positionInputs,
-    marks,
-    links,
-    basisThreshold: env.BASIS_THRESHOLD,
-  });
-
-  // --- enrich positions for display ---
-  const inputById = new Map(positionInputs.map((p) => [p.positionId, p]));
-  const positions: PositionRow[] = risk.positions.map((r) => {
-    const market = marketById.get(Number(r.marketId));
-    const input = inputById.get(r.positionId);
-    return {
-      ...r,
-      ticker: market?.externalTicker ?? r.marketId,
-      question: market?.question ?? r.marketId,
-      category: input?.category ?? 'Uncategorized',
-      cluster: input?.cluster ?? 'Other',
-      resolutionDate: market?.resolutionDate ? market.resolutionDate.toISOString() : null,
-      status: market?.status ?? 'active',
-      markTs: marks.get(r.marketId)?.ts ?? null,
-    };
-  });
-
-  // --- enrich basis legs for display ---
-  const basis: BasisRow[] = risk.basis.map((b) => ({
-    eventLinkId: b.eventLinkId,
-    label: b.label,
-    basis: b.basis,
-    flagged: b.flagged,
-    stale: b.stale,
-    resolutionMismatch: b.resolutionMismatch,
-    legs: b.legs.map((leg) => {
-      const market = marketById.get(Number(leg.marketId));
-      return {
-        venue: leg.venue,
-        marketId: leg.marketId,
-        ticker: market?.externalTicker ?? leg.marketId,
-        question: market?.question ?? leg.marketId,
-        rawMark: leg.rawMark,
-        yesEquiv: leg.yesEquiv,
-        stale: leg.stale,
-      };
-    }),
+  const feeds: FeedLite[] = feedRows.map((f) => ({
+    venue: f.venue,
+    channel: f.channel,
+    state: f.state,
+    lastMessageAt: f.lastMessageAt ? f.lastMessageAt.getTime() : null,
   }));
 
-  const feeds: FeedRow[] = feedRows.map((f) => {
-    const ageMs = f.lastMessageAt ? now - f.lastMessageAt.getTime() : null;
-    return {
-      venue: f.venue,
-      channel: f.channel,
-      state: f.state,
-      lastMessageAt: f.lastMessageAt ? f.lastMessageAt.toISOString() : null,
-      ageMs,
-    };
-  });
-
   return {
-    generatedAt: new Date(now).toISOString(),
-    totals: risk.totals,
-    exposure: risk.exposure,
-    worstCase: risk.worstCase,
-    concentration: risk.concentration,
-    positions,
-    basis,
+    positionInputs,
+    links,
+    markets,
+    marks,
     feeds,
-    staleThresholdMs: env.STALE_THRESHOLD_MS,
     basisThreshold: env.BASIS_THRESHOLD,
-    pendingLinkCount: linkRows.filter((l) => !l.confirmed).length,
+    staleThresholdMs: env.STALE_THRESHOLD_MS,
   };
+}
+
+/** SSR convenience: bootstrap + the initial assembled model. */
+export async function loadDashboard(
+  now: number = Date.now(),
+): Promise<{ model: DashboardModel; bootstrap: LiveBootstrap }> {
+  const bootstrap = await loadBootstrap(now);
+  const model = assembleDashboard({ now, ...bootstrap });
+  return { model, bootstrap };
 }

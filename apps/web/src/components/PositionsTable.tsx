@@ -82,13 +82,20 @@ export function PositionsTable({
               <td className="px-3 py-2 text-right text-slate-300">{qty(r.quantity)}</td>
               <td className="px-3 py-2 text-right text-slate-300">{cents(r.avgPrice)}</td>
               <td className="px-3 py-2 text-right text-slate-100" data-cell="mark">
-                {cents(r.mark)}
+                {/* key on markTs so the cell remounts and flashes when the mark moves */}
+                <span key={r.markTs ?? 'na'} className="inline-block animate-flash rounded px-1">
+                  {cents(r.mark)}
+                </span>
               </td>
               <td className="px-3 py-2 text-right text-slate-100" data-cell="value">
-                {money(r.marketValue)}
+                <span key={r.markTs ?? 'na'} className="inline-block animate-flash rounded px-1">
+                  {money(r.marketValue)}
+                </span>
               </td>
               <td className={`px-3 py-2 text-right ${pnlColor(r.unrealizedPnl)}`} data-cell="pnl">
-                {signedMoney(r.unrealizedPnl)}
+                <span key={r.markTs ?? 'na'} className="inline-block animate-flash rounded px-1">
+                  {signedMoney(r.unrealizedPnl)}
+                </span>
               </td>
               <td className="px-3 py-2">
                 <Freshness row={r} now={now} staleThresholdMs={staleThresholdMs} />
