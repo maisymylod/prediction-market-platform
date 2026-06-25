@@ -1,0 +1,69 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pmp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pmp}
+      POSTGRES_DB: ${POSTGRES_DB:-pmp}
+    ports:
+      # Host 5433 to avoid clashing with a local Postgres on 5432.
+      - "5433:5432"
+    volumes:
+      - pmp_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pmp} -d ${POSTGRES_DB:-pmp}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Applies migrations then seeds, once, against a healthy db. Exits 0.
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    command: sh -c "pnpm db:migrate && pnpm db:seed"
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-pmp}:${POSTGRES_PASSWORD:-pmp}@db:5432/${POSTGRES_DB:-pmp}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    command: pnpm --filter worker start
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-pmp}:${POSTGRES_PASSWORD:-pmp}@db:5432/${POSTGRES_DB:-pmp}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    command: pnpm --filter web start
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-pmp}:${POSTGRES_PASSWORD:-pmp}@db:5432/${POSTGRES_DB:-pmp}
+      WEB_PORT: 3000
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  pmp_pgdata:
