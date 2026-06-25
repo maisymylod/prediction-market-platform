@@ -48,6 +48,8 @@ export function LiveDashboard({
       feeds: [...feedsRef.current.values()],
       basisThreshold: bootstrap.basisThreshold,
       staleThresholdMs: bootstrap.staleThresholdMs,
+      pendingLinks: bootstrap.pendingLinks,
+      matcherEnabled: bootstrap.matcherEnabled,
     });
     setView({ model, now });
   }, [bootstrap]);

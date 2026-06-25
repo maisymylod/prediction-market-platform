@@ -1,4 +1,4 @@
-import { type LinkedEvent, type PositionInput, type VenueName } from '@pmp/core';
+import { hasAnthropicCreds, type LinkedEvent, type PositionInput, type VenueName } from '@pmp/core';
 import {
   venues as venuesTable,
   markets as marketsTable,
@@ -11,7 +11,14 @@ import {
 import { db } from './db.js';
 import { env } from './config.js';
 import { assembleDashboard } from '../lib/assemble.js';
-import type { DashboardModel, FeedLite, LiveBootstrap, MarketMeta, MarkLite } from './types.js';
+import type {
+  DashboardModel,
+  FeedLite,
+  LiveBootstrap,
+  MarketMeta,
+  MarkLite,
+  PendingLink,
+} from './types.js';
 
 const num = (s: string | null): number | null => (s === null ? null : Number(s));
 
@@ -117,6 +124,24 @@ export async function loadBootstrap(now: number = Date.now()): Promise<LiveBoots
     lastMessageAt: f.lastMessageAt ? f.lastMessageAt.getTime() : null,
   }));
 
+  const pendingLinks: PendingLink[] = linkRows
+    .filter((l) => !l.confirmed)
+    .map((l) => ({
+      eventLinkId: String(l.id),
+      label: l.canonicalQuestion,
+      confidence: l.confidence === null ? null : Number(l.confidence),
+      rationale: l.rationale,
+      resolutionMismatch: l.resolutionMismatch,
+      legs: (legsByLink.get(l.id) ?? []).map((leg) => {
+        const market = marketById.get(Number(leg.marketId));
+        return {
+          venue: leg.venue,
+          ticker: market?.externalTicker ?? leg.marketId,
+          question: market?.question ?? leg.marketId,
+        };
+      }),
+    }));
+
   return {
     positionInputs,
     links,
@@ -125,6 +150,8 @@ export async function loadBootstrap(now: number = Date.now()): Promise<LiveBoots
     feeds,
     basisThreshold: env.BASIS_THRESHOLD,
     staleThresholdMs: env.STALE_THRESHOLD_MS,
+    pendingLinks,
+    matcherEnabled: hasAnthropicCreds(env),
   };
 }
 

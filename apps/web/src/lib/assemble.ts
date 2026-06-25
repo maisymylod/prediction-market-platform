@@ -12,6 +12,7 @@ import type {
   FeedRow,
   MarketMeta,
   MarkLite,
+  PendingLink,
   PositionRow,
 } from '../server/types.js';
 
@@ -24,6 +25,8 @@ export interface AssembleParams {
   feeds: FeedLite[];
   basisThreshold: number;
   staleThresholdMs: number;
+  pendingLinks: PendingLink[];
+  matcherEnabled: boolean;
 }
 
 /**
@@ -119,6 +122,7 @@ export function assembleDashboard(p: AssembleParams): DashboardModel {
     feeds,
     staleThresholdMs: p.staleThresholdMs,
     basisThreshold: p.basisThreshold,
-    pendingLinkCount: p.links.filter((l) => !l.confirmed).length,
+    pendingLinks: p.pendingLinks,
+    matcherEnabled: p.matcherEnabled,
   };
 }

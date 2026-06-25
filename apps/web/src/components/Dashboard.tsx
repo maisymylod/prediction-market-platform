@@ -2,6 +2,7 @@ import type { DashboardModel } from '../server/types.js';
 import { PositionsTable } from './PositionsTable.js';
 import { RiskPanel } from './RiskPanel.js';
 import { CrossVenueView } from './CrossVenueView.js';
+import { MatcherPanel } from './MatcherPanel.js';
 import { StatusBar, type ConnectionState } from './StatusBar.js';
 
 // Presentational shell shared by the static SSR render and the live client
@@ -28,8 +29,8 @@ export function Dashboard({
           </div>
           <div className="text-right text-xs text-muted">
             <div>as of {new Date(model.generatedAt).toLocaleTimeString()}</div>
-            {model.pendingLinkCount > 0 && (
-              <div className="text-accent">{model.pendingLinkCount} link(s) awaiting confirm</div>
+            {model.pendingLinks.length > 0 && (
+              <div className="text-accent">{model.pendingLinks.length} link(s) awaiting confirm</div>
             )}
           </div>
         </header>
@@ -43,13 +44,14 @@ export function Dashboard({
             />
             <CrossVenueView basis={model.basis} threshold={model.basisThreshold} />
           </div>
-          <div>
+          <div className="space-y-4">
             <RiskPanel
               totals={model.totals}
               exposure={model.exposure}
               worstCase={model.worstCase}
               concentration={model.concentration}
             />
+            <MatcherPanel pendingLinks={model.pendingLinks} matcherEnabled={model.matcherEnabled} />
           </div>
         </div>
       </main>

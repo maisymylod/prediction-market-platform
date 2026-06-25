@@ -52,6 +52,8 @@ export interface LiveBootstrap {
   feeds: FeedLite[];
   basisThreshold: number;
   staleThresholdMs: number;
+  pendingLinks: PendingLink[];
+  matcherEnabled: boolean;
 }
 
 export interface PositionRow extends PositionRisk {
@@ -93,6 +95,16 @@ export interface FeedRow {
   ageMs: number | null;
 }
 
+/** An LLM-proposed cross-venue link awaiting a manual confirm click. */
+export interface PendingLink {
+  eventLinkId: string;
+  label: string;
+  confidence: number | null;
+  rationale: string | null;
+  resolutionMismatch: boolean;
+  legs: { venue: VenueName; ticker: string; question: string }[];
+}
+
 export interface DashboardModel {
   generatedAt: string;
   totals: PortfolioTotals;
@@ -105,5 +117,7 @@ export interface DashboardModel {
   staleThresholdMs: number;
   basisThreshold: number;
   /** Unconfirmed links awaiting manual confirm (matcher, step 6). */
-  pendingLinkCount: number;
+  pendingLinks: PendingLink[];
+  /** True when the LLM matcher is configured (ANTHROPIC_API_KEY present). */
+  matcherEnabled: boolean;
 }

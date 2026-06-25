@@ -11,6 +11,7 @@ import { db, handle } from './db.js';
 import { FeedMonitor } from './feeds.js';
 import { PriceSimulator, type SimMarket } from './simulator.js';
 import { KalshiSource } from './sources/kalshi-source.js';
+import { PolymarketSource } from './sources/polymarket-source.js';
 import { startRun, finishRun } from './publisher.js';
 
 /** A price source the worker drives + reconciles + shuts down uniformly. */
@@ -81,8 +82,14 @@ async function main() {
     }
   }
 
-  // Polymarket live ingestion arrives in step 6.
-  if (env.USE_POLYMARKET_LIVE) log.warn('USE_POLYMARKET_LIVE set — Polymarket ingestion arrives in step 6; using simulator');
+  // --- Polymarket live (step 6): public CLOB price polling ---
+  if (env.USE_POLYMARKET_LIVE) {
+    const polyMarkets = markets.filter((m) => m.venue === 'polymarket');
+    const ps = new PolymarketSource(polyMarkets, feed);
+    ps.start();
+    sources.push(ps);
+    for (const m of polyMarkets) liveCovered.add(m.marketId);
+  }
 
   // --- Simulator drives every market NOT covered by a live source ---
   if (env.USE_PRICE_SIMULATOR) {
