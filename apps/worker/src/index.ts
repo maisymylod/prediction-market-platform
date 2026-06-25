@@ -10,7 +10,14 @@ import { env, log } from './config.js';
 import { db, handle } from './db.js';
 import { FeedMonitor } from './feeds.js';
 import { PriceSimulator, type SimMarket } from './simulator.js';
+import { KalshiSource } from './sources/kalshi-source.js';
 import { startRun, finishRun } from './publisher.js';
+
+/** A price source the worker drives + reconciles + shuts down uniformly. */
+interface IngestionSource {
+  stop: () => void | Promise<void>;
+  reconcile: () => Promise<number>;
+}
 
 /** Markets the user holds positions in OR is watching (in any link). */
 async function watchedMarkets(): Promise<SimMarket[]> {
@@ -38,6 +45,7 @@ async function watchedMarkets(): Promise<SimMarket[]> {
     result.push({
       marketId: id,
       venue: venueName.get(market.venueId) ?? 'kalshi',
+      externalTicker: market.externalTicker,
       mark: markById.get(id) ?? 0.5,
     });
   }
@@ -59,36 +67,51 @@ async function main() {
   const feed = new FeedMonitor(env.STALE_THRESHOLD_MS);
   feed.start();
 
-  // Live venue ingestion lands in steps 5 (Kalshi) and 6 (Polymarket). Until a
-  // live source is active, the simulator drives the exact same NOTIFY path.
-  if (env.USE_KALSHI_LIVE) log.warn('USE_KALSHI_LIVE set — Kalshi live ingestion arrives in step 5; using simulator');
+  const sources: IngestionSource[] = [];
+  const liveCovered = new Set<number>();
+
+  // --- Kalshi live (step 5): authenticated market-data WS + REST reconcile ---
+  if (env.USE_KALSHI_LIVE) {
+    const kalshiMarkets = markets.filter((m) => m.venue === 'kalshi');
+    const ks = KalshiSource.create(kalshiMarkets, feed);
+    if (ks) {
+      ks.start();
+      sources.push(ks);
+      for (const m of kalshiMarkets) liveCovered.add(m.marketId);
+    }
+  }
+
+  // Polymarket live ingestion arrives in step 6.
   if (env.USE_POLYMARKET_LIVE) log.warn('USE_POLYMARKET_LIVE set — Polymarket ingestion arrives in step 6; using simulator');
 
-  let simulator: PriceSimulator | null = null;
-  let simRunId: number | null = null;
-  let reconcileTimer: ReturnType<typeof setInterval> | null = null;
-
+  // --- Simulator drives every market NOT covered by a live source ---
   if (env.USE_PRICE_SIMULATOR) {
-    simulator = new PriceSimulator(markets, feed, { tickMs: env.SIMULATOR_TICK_MS });
-    simRunId = await startRun('sim');
-    simulator.start();
-
-    // Periodic full reconciliation: the correctness backstop for missed ticks.
-    reconcileTimer = setInterval(() => {
-      void (async () => {
-        const runId = await startRun('reconcile');
-        try {
-          const rows = await simulator!.reconcile();
-          await finishRun(runId, { rowsWritten: rows, errorCount: 0 });
-          log.debug('reconciliation complete', { rows });
-        } catch (err) {
-          await finishRun(runId, { rowsWritten: 0, errorCount: 1, errorDetail: { message: (err as Error).message } });
-        }
-      })();
-    }, env.RECONCILE_INTERVAL_MS);
-  } else {
-    log.warn('no active price source (simulator off and no live venue wired)');
+    const simMarkets = markets.filter((m) => !liveCovered.has(m.marketId));
+    if (simMarkets.length > 0) {
+      const sim = new PriceSimulator(simMarkets, feed, { tickMs: env.SIMULATOR_TICK_MS });
+      sim.start();
+      sources.push(sim);
+    } else {
+      log.info('all watched markets covered by live sources; simulator idle');
+    }
+  } else if (sources.length === 0) {
+    log.warn('no active price source (simulator off and no live venue connected)');
   }
+
+  // --- Periodic full reconciliation across all sources (correctness backstop) ---
+  const reconcileTimer = setInterval(() => {
+    void (async () => {
+      const runId = await startRun('reconcile');
+      try {
+        const counts = await Promise.all(sources.map((s) => s.reconcile()));
+        const rows = counts.reduce((a, b) => a + b, 0);
+        await finishRun(runId, { rowsWritten: rows, errorCount: 0 });
+        log.debug('reconciliation complete', { rows });
+      } catch (err) {
+        await finishRun(runId, { rowsWritten: 0, errorCount: 1, errorDetail: { message: (err as Error).message } });
+      }
+    })();
+  }, env.RECONCILE_INTERVAL_MS);
 
   // --- graceful shutdown ---
   let shuttingDown = false;
@@ -96,11 +119,10 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     log.info('shutting down', { signal });
-    if (reconcileTimer) clearInterval(reconcileTimer);
-    simulator?.stop();
+    clearInterval(reconcileTimer);
+    for (const s of sources) await s.stop();
     feed.stop();
     await feed.markAllDown();
-    if (simRunId !== null) await finishRun(simRunId, { rowsWritten: 0, errorCount: 0 });
     await handle.close();
     process.exit(0);
   };

@@ -16,6 +16,8 @@ interface FeedEntry {
   lastMessageAt: number | null;
   state: FeedState;
   lastPublishedAt: number;
+  /** Explicit state signalled by a source (e.g. 'reconnecting'), cleared on touch. */
+  signal: FeedState | null;
 }
 
 /** Default venue -> primary feed channel name. */
@@ -44,25 +46,34 @@ export class FeedMonitor {
     return `${venue}:${channel}`;
   }
 
-  track(venue: VenueName, channel: string): void {
+  private ensure(venue: VenueName, channel: string): FeedEntry {
     const k = this.key(venue, channel);
-    if (!this.feeds.has(k)) {
-      this.feeds.set(k, { venue, channel, lastMessageAt: null, state: 'down', lastPublishedAt: 0 });
+    let entry = this.feeds.get(k);
+    if (!entry) {
+      entry = { venue, channel, lastMessageAt: null, state: 'down', lastPublishedAt: 0, signal: null };
+      this.feeds.set(k, entry);
     }
+    return entry;
   }
 
-  /** Record a live message on a feed. */
+  track(venue: VenueName, channel: string): void {
+    this.ensure(venue, channel);
+  }
+
+  /** Record a live message on a feed; clears any prior signalled state. */
   touch(venue: VenueName, channel: string, ts: number = this.now()): void {
-    const k = this.key(venue, channel);
-    const entry = this.feeds.get(k) ?? {
-      venue,
-      channel,
-      lastMessageAt: null,
-      state: 'down' as FeedState,
-      lastPublishedAt: 0,
-    };
+    const entry = this.ensure(venue, channel);
     entry.lastMessageAt = Math.max(entry.lastMessageAt ?? 0, ts);
-    this.feeds.set(k, entry);
+    entry.signal = null;
+  }
+
+  /** Explicitly signal a transient state (e.g. 'reconnecting') from a source. */
+  signalState(venue: VenueName, channel: string, state: FeedState): void {
+    const entry = this.ensure(venue, channel);
+    entry.signal = state;
+    void this.persistAndNotify({ ...entry, state }, this.now()).then(() => {
+      entry.lastPublishedAt = this.now();
+    });
   }
 
   start(): void {
@@ -88,7 +99,9 @@ export class FeedMonitor {
   private async evaluate(): Promise<void> {
     const now = this.now();
     for (const entry of this.feeds.values()) {
-      const next = freshnessFor(entry.lastMessageAt, now, this.staleThresholdMs) as FeedState;
+      // A live message within the window always wins over a stale signal.
+      const fresh = freshnessFor(entry.lastMessageAt, now, this.staleThresholdMs) as FeedState;
+      const next = entry.signal && fresh !== 'live' ? entry.signal : fresh;
       const changed = next !== entry.state;
       const due = now - entry.lastPublishedAt > this.republishMs;
       entry.state = next;

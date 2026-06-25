@@ -6,6 +6,7 @@ import { log } from './config.js';
 export interface SimMarket {
   marketId: number;
   venue: VenueName;
+  externalTicker: string;
   mark: number;
 }
 
