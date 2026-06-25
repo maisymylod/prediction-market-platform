@@ -1,0 +1,58 @@
+# Render Blueprint: Postgres + web (Next.js, persistent SSE/LISTEN) + worker.
+# Deploy: Render Dashboard -> New -> Blueprint -> pick this repo. Render reads
+# this file and provisions all three, wiring DATABASE_URL automatically.
+# Runs keyless on the price simulator. Add live-venue flags + secrets in the
+# dashboard to enable real Kalshi/Polymarket ingestion.
+
+databases:
+  - name: pmp-db
+    databaseName: pmp
+    user: pmp
+    plan: free # 30-day free Postgres; upgrade to 'basic' for persistence
+
+services:
+  # Persistent Next.js server: SSR + SSE fan-out (needs a long-lived process,
+  # not serverless/edge). Runs migrations + seed before each deploy.
+  - type: web
+    name: pmp-web
+    runtime: docker
+    repo: https://github.com/maisymylod/prediction-market-platform
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerCommand: pnpm --filter web start
+    plan: starter # always-on; required so the SSE stream stays connected
+    region: oregon
+    healthCheckPath: /api/health
+    preDeployCommand: pnpm db:migrate && pnpm db:seed
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: pmp-db
+          property: connectionString
+      - key: NODE_ENV
+        value: production
+      - key: USE_PRICE_SIMULATOR
+        value: "true"
+
+  # Long-running ingestion worker (WS streams + polling + simulator + NOTIFY).
+  # Background workers require a paid instance on Render.
+  - type: worker
+    name: pmp-worker
+    runtime: docker
+    repo: https://github.com/maisymylod/prediction-market-platform
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerCommand: pnpm --filter worker start
+    plan: starter
+    region: oregon
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: pmp-db
+          property: connectionString
+      - key: NODE_ENV
+        value: production
+      - key: USE_PRICE_SIMULATOR
+        value: "true"
